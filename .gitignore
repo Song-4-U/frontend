@@ -40,3 +40,9 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# cursor skill temp files
+.pre-commit-check-*.patch
+.pre-commit-check-*.txt
+.pr-body.md
+.review-body.md

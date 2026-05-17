@@ -210,21 +210,41 @@ export async function getRecommendationsByTimbre(
  * @param file 업로드할 Blob/File
  * @param contentType presigned URL 발급 시 사용한 content_type 과 동일해야 함
  * @param onProgress 0~100 사이 진행률 콜백 (옵션)
+ * @param signal 외부에서 업로드를 취소할 수 있는 AbortSignal (옵션)
  */
 export function uploadToS3(
   uploadUrl: string,
   file: Blob,
   contentType: string,
   onProgress?: (progress: number) => void,
+  signal?: AbortSignal,
 ): Promise<void> {
   if (USE_MOCK) {
-    return mockUploadToS3(file, onProgress);
+    return mockUploadToS3(file, onProgress, signal);
   }
 
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new DOMException("Upload aborted", "AbortError"));
+      return;
+    }
+
     const xhr = new XMLHttpRequest();
     xhr.open("PUT", uploadUrl, true);
     xhr.setRequestHeader("Content-Type", contentType);
+
+    const onAbort = () => {
+      try {
+        xhr.abort();
+      } finally {
+        reject(new DOMException("Upload aborted", "AbortError"));
+      }
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+
+    const cleanupSignal = () => {
+      signal?.removeEventListener("abort", onAbort);
+    };
 
     if (onProgress) {
       xhr.upload.onprogress = (event) => {
@@ -236,6 +256,7 @@ export function uploadToS3(
     }
 
     xhr.onload = () => {
+      cleanupSignal();
       if (xhr.status >= 200 && xhr.status < 300) {
         resolve();
       } else {
@@ -249,7 +270,8 @@ export function uploadToS3(
       }
     };
 
-    xhr.onerror = () =>
+    xhr.onerror = () => {
+      cleanupSignal();
       reject(
         new ApiError({
           status: 0,
@@ -257,8 +279,12 @@ export function uploadToS3(
           message: "Network error while uploading to S3",
         }),
       );
+    };
 
-    xhr.ontimeout = () => reject(new TimeoutError("S3 upload timed out"));
+    xhr.ontimeout = () => {
+      cleanupSignal();
+      reject(new TimeoutError("S3 upload timed out"));
+    };
 
     xhr.send(file);
   });
@@ -268,10 +294,14 @@ export function uploadToS3(
 async function mockUploadToS3(
   _file: Blob,
   onProgress?: (progress: number) => void,
+  signal?: AbortSignal,
 ): Promise<void> {
   const steps = 10;
   const stepDelay = MOCK_DELAY_MS.upload / steps;
   for (let i = 1; i <= steps; i++) {
+    if (signal?.aborted) {
+      throw new DOMException("Upload aborted", "AbortError");
+    }
     await sleep(stepDelay);
     onProgress?.(Math.round((i / steps) * 100));
   }
